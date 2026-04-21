@@ -29,6 +29,7 @@ final class Main {
 		Modules\Example::class,
 		Modules\Settings\Admin_Screen::class,
 		Modules\Settings\Settings::class,
+		Modules\AI::class,
 	];
 
 	/**
