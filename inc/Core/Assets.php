@@ -89,14 +89,17 @@ final class Assets implements Registrable {
 	}
 
 	/**
-	 * Register assets for editor.
+	 * Register and enqueue assets for the Block Editor.
 	 *
-	 * Assets are registered once centrally, and enqueued in the modules that need them.
+	 * Hooked to `enqueue_block_editor_assets`, so registration and enqueueing
+	 * happen in the same pass, no separate enqueue call needed elsewhere.
 	 */
 	public function register_editor_assets(): void {
 		// Register editor script and style.
 		$this->register_script( self::EDITOR_HANDLE, 'editor' );
 		$this->register_style( self::EDITOR_HANDLE, 'editor' );
+
+		wp_enqueue_script( self::EDITOR_HANDLE );
 	}
 
 	/**
