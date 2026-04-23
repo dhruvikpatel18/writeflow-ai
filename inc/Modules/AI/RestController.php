@@ -16,6 +16,7 @@ use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
 use WriteFlowAI\Framework\Contracts\Abstracts\Abstract_REST_Controller;
+use WriteFlowAI\Services\AIClient;
 
 /**
  * Class - RestController
@@ -146,9 +147,22 @@ final class RestController extends Abstract_REST_Controller {
 	public function handle_suggest( WP_REST_Request $request ): WP_REST_Response {
 		$content = $request->get_param( 'content' );
 
-		// TODO: Replace with actual AI microservice call in a future iteration.
-		// Keeping this stub isolated here makes it a single swap point later.
 		$suggestion = $this->generate_suggestion( $content );
+
+		// If the service returned an error, return a proper error response.
+		if ( is_wp_error( $suggestion ) ) {
+			$response = rest_ensure_response(
+				[
+					'success' => false,
+					'error'   => [
+						'code'    => $suggestion->get_error_code(),
+						'message' => $suggestion->get_error_message(),
+					],
+				]
+			);
+			$response->set_status( 500 );
+			return $response;
+		}
 
 		return rest_ensure_response(
 			[
@@ -163,13 +177,16 @@ final class RestController extends Abstract_REST_Controller {
 	/**
 	 * Generates an AI suggestion for the given content.
 	 *
-	 * Currently returns a static placeholder. This method will be the single
-	 * integration point replaced when the real AI microservice is wired up.
+	 * Delegates to the AIClient service, which handles OpenAI API communication.
+	 * Designed to be swappable for other AI providers in the future.
 	 *
 	 * @param string $content Sanitized text content from the request.
+	 *
+	 * @return string|WP_Error The suggestion string on success, WP_Error on failure.
 	 */
-	private function generate_suggestion( string $content ): string { // phpcs:ignore SlevomatCodingStandard.Functions.UnusedParameter.UnusedParameter -- $content used once real AI is wired.
-		return 'This is an AI suggestion based on your content.';
+	private function generate_suggestion( string $content ): string|WP_Error {
+		$client = new AIClient();
+		return $client->suggest( $content );
 	}
 
 	/**
