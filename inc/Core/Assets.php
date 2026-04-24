@@ -100,6 +100,15 @@ final class Assets implements Registrable {
 		$this->register_style( self::EDITOR_HANDLE, 'editor' );
 
 		wp_enqueue_script( self::EDITOR_HANDLE );
+
+		// Localize nonce for REST API calls from the Block Editor.
+		wp_localize_script(
+			self::EDITOR_HANDLE,
+			'WriteFlowAI',
+			[
+				'nonce' => wp_create_nonce( 'wp_rest' ),
+			]
+		);
 	}
 
 	/**

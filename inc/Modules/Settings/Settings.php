@@ -26,9 +26,9 @@ final class Settings implements Registrable {
 	public const SETTING_GROUP = self::SETTING_PREFIX . 'settings';
 
 	/**
-	 * Key for the delete settings on deactivate option.
+	 * Key for the API key option.
 	 */
-	public const EXAMPLE_OPTION_KEY = self::SETTING_PREFIX . 'example_option';
+	public const API_KEY_OPTION = self::SETTING_PREFIX . 'api_key';
 
 	/**
 	 * {@inheritDoc}
@@ -42,34 +42,43 @@ final class Settings implements Registrable {
 	 * Register plugin settings.
 	 */
 	public function register_settings(): void {
-		// Add your settings here.
-		$settings = [
-			self::EXAMPLE_OPTION_KEY => [
-				'type'              => 'boolean',
-				'label'             => __( 'Example Option', 'writeflow-ai' ),
-				'description'       => __( 'This is an example option.', 'writeflow-ai' ),
-				'sanitize_callback' => 'rest_sanitize_boolean',
-				'show_in_rest'      => [
-					'schema' => [
-						'type' => 'boolean',
-					],
-				],
-			],
-		];
-
-		foreach ( $settings as $key => $args ) {
-			register_setting(
-				self::SETTING_GROUP,
-				$key,
-				$args
-			);
-		}
+		// Register the OpenAI API key setting.
+		register_setting(
+			self::SETTING_GROUP,
+			self::API_KEY_OPTION,
+			[
+				'type'              => 'string',
+				'sanitize_callback' => [ $this, 'sanitize_api_key' ],
+				'show_in_rest'      => false,
+				'description'       => __( 'OpenAI API key for WriteFlow AI', 'writeflow-ai' ),
+			]
+		);
 	}
 
 	/**
-	 * Whether example option is enabled.
+	 * Sanitizes the API key input.
+	 *
+	 * @param mixed $value The raw input value.
+	 *
+	 * @return string Sanitized API key, or empty string if invalid.
 	 */
-	public static function is_example_option_enabled(): bool {
-		return (bool) get_option( self::EXAMPLE_OPTION_KEY, false );
+	public function sanitize_api_key( mixed $value ): string {
+		if ( ! is_string( $value ) ) {
+			return '';
+		}
+
+		$trimmed = trim( $value );
+
+		if ( '' === $trimmed || ! str_starts_with( $trimmed, 'sk-' ) ) {
+			add_settings_error(
+				self::API_KEY_OPTION,
+				'invalid_api_key',
+				__( 'OpenAI API key must start with "sk-".', 'writeflow-ai' ),
+				'error'
+			);
+			return '';
+		}
+
+		return $trimmed;
 	}
 }

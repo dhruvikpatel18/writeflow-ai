@@ -15,6 +15,16 @@ import { useState } from 'react';
 import type { ComponentType } from 'react';
 
 /**
+ * Set up nonce middleware for REST API calls.
+ *
+ * The nonce is localized by PHP via wp_localize_script().
+ * This middleware automatically includes it in all apiFetch requests.
+ */
+if ( window.WriteFlowAI?.nonce ) {
+	apiFetch.use( apiFetch.createNonceMiddleware( window.WriteFlowAI.nonce ) );
+}
+
+/**
  * Block types that receive the AI Suggest toolbar button.
  *
  * Keeping this list explicit here makes it trivial to extend
