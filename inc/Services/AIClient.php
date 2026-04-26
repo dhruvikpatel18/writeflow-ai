@@ -63,6 +63,33 @@ final class AIClient {
 	private const REQUEST_TIMEOUT = 15;
 
 	/**
+	 * Cache TTL for suggestions in seconds.
+	 *
+	 * 30 minutes. Balances freshness with reduced API calls.
+	 * Can be invalidated manually if needed.
+	 *
+	 * @var int
+	 */
+	private const CACHE_TTL = 30 * MINUTE_IN_SECONDS;
+
+	/**
+	 * Cache key prefix for suggestions.
+	 *
+	 * @var string
+	 */
+	private const CACHE_KEY_PREFIX = 'writeflow_ai_suggest_';
+
+	/**
+	 * Cache version for invalidation on logic changes.
+	 *
+	 * Bump this version to invalidate all cached suggestions.
+	 * Useful when you change the model, prompt, temperature, or other logic.
+	 *
+	 * @var string
+	 */
+	private const CACHE_VERSION = 'v1';
+
+	/**
 	 * API key for OpenAI authentication.
 	 *
 	 * @var string|null
@@ -103,6 +130,16 @@ final class AIClient {
 			return $key_error;
 		}
 
+		// Generate cache key from content hash.
+		$cache_key = $this->generate_cache_key( $content );
+
+		// Check if suggestion is already cached.
+		$cached = get_transient( $cache_key );
+		if ( is_string( $cached ) && '' !== $cached ) {
+			error_log( 'WriteFlow AI cache hit: ' . $cache_key );
+			return $cached;
+		}
+
 		// Build the request to OpenAI.
 		$request = $this->build_request( $content );
 
@@ -124,7 +161,14 @@ final class AIClient {
 		}
 
 		// Parse and validate the API response.
-		return $this->parse_response( $response );
+		$suggestion = $this->parse_response( $response );
+
+		// Only cache successful string responses (not errors).
+		if ( is_string( $suggestion ) && '' !== $suggestion ) {
+			set_transient( $cache_key, $suggestion, self::CACHE_TTL );
+		}
+
+		return $suggestion;
 	}
 
 	/**
@@ -273,5 +317,32 @@ final class AIClient {
 
 		// Trim whitespace from the suggestion.
 		return trim( $suggestion );
+	}
+
+	/**
+	 * Generates a deterministic cache key for the given content.
+	 *
+	 * Includes model and version to invalidate cache when logic changes.
+	 * Uses JSON serialization for consistent hashing across calls.
+	 *
+	 * @param string $content The content to generate a key for.
+	 *
+	 * @return string The cache key.
+	 */
+	private function generate_cache_key( string $content ): string {
+		// Include model and version in cache key so that changes to
+		// model, prompt, temperature, or other logic automatically
+		// invalidate old cached entries.
+		$cache_context = [
+			'version' => self::CACHE_VERSION,
+			'model'   => self::MODEL,
+			'content' => $content,
+		];
+
+		// Hash the full context to create a deterministic, short key.
+		// JSON encoding ensures consistent serialization.
+		$content_hash = md5( (string) wp_json_encode( $cache_context ) );
+
+		return self::CACHE_KEY_PREFIX . $content_hash;
 	}
 }
