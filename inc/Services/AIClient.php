@@ -320,6 +320,120 @@ final class AIClient {
 	}
 
 	/**
+	 * Streams an AI suggestion for the given content, invoking a callback per text chunk.
+	 *
+	 * Uses cURL directly instead of wp_remote_post because wp_remote_post buffers
+	 * the entire response before returning, incompatible with HTTP streaming.
+	 *
+	 * OpenAI sends Server-Sent Events (SSE) in the form:
+	 *   data: {"choices":[{"delta":{"content":"Hello"}}]}
+	 *
+	 * This method parses each SSE line and passes only the plain-text delta to the
+	 * $chunk_callback, so callers never deal with raw SSE framing.
+	 *
+	 * @param string   $content        Plain-text content to suggest improvements for.
+	 * @param callable $chunk_callback Invoked with each decoded text chunk (string).
+	 *
+	 * @return true|WP_Error True on success, WP_Error on failure.
+	 */
+	public function suggest_stream( string $content, callable $chunk_callback ): true|WP_Error {
+		$key_error = $this->validate_api_key();
+		if ( is_wp_error( $key_error ) ) {
+			return $key_error;
+		}
+
+		$body = [
+			'model'       => self::MODEL,
+			'messages'    => [
+				[
+					'role'    => 'system',
+					'content' => 'You are a helpful writing assistant that improves clarity and quality.',
+				],
+				[
+					'role'    => 'user',
+					'content' => $content,
+				],
+			],
+			'temperature' => self::TEMPERATURE,
+			'max_tokens'  => self::MAX_TOKENS,
+			'stream'      => true,
+		];
+
+		// phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_init -- wp_remote_post does not support HTTP streaming; cURL is required here.
+		$ch = curl_init();
+
+		curl_setopt_array(
+			$ch,
+			[
+				CURLOPT_URL            => self::API_BASE_URL . '/chat/completions',
+				CURLOPT_POST           => true,
+				CURLOPT_POSTFIELDS     => wp_json_encode( $body ),
+				CURLOPT_HTTPHEADER     => [
+					'Content-Type: application/json',
+					'Authorization: Bearer ' . $this->api_key,
+				],
+				CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
+				CURLOPT_SSL_VERIFYPEER => 'production' === wp_get_environment_type(),
+				// CURLOPT_RETURNTRANSFER must be false so cURL passes data to WRITEFUNCTION.
+				CURLOPT_RETURNTRANSFER => false,
+				// WRITEFUNCTION receives raw SSE bytes from OpenAI as they arrive.
+				CURLOPT_WRITEFUNCTION  => static function ( $curl, string $data ) use ( $chunk_callback ): int {
+					// Each $data packet may contain one or more SSE lines.
+					$lines = explode( "\n", $data );
+
+					foreach ( $lines as $line ) {
+						$line = trim( $line );
+
+						// SSE lines with payload are prefixed with "data: ".
+						if ( ! str_starts_with( $line, 'data: ' ) ) {
+							continue;
+						}
+
+						$json_str = substr( $line, 6 ); // Strip "data: " prefix.
+
+						// OpenAI signals end-of-stream with the literal token [DONE].
+						if ( '[DONE]' === $json_str ) {
+							continue;
+						}
+
+						$decoded    = json_decode( $json_str, true );
+						$chunk_text = $decoded['choices'][0]['delta']['content'] ?? null;
+
+						if ( is_string( $chunk_text ) && '' !== $chunk_text ) {
+							$chunk_callback( $chunk_text );
+						}
+					}
+
+					// Must return the byte count received; cURL aborts if this doesn't match.
+					return strlen( $data );
+				},
+			]
+		);
+
+		curl_exec( $ch );
+		$curl_error = curl_error( $ch );
+		$http_code  = (int) curl_getinfo( $ch, CURLINFO_HTTP_CODE );
+		curl_close( $ch );
+		// phpcs:enable WordPress.WP.AlternativeFunctions.curl_curl_init
+
+		if ( $curl_error ) {
+			return new WP_Error(
+				'ai_curl_error',
+				sprintf( 'cURL error while streaming from OpenAI: %s', $curl_error )
+			);
+		}
+
+		if ( $http_code >= 400 ) {
+			return new WP_Error(
+				'ai_http_error',
+				sprintf( 'OpenAI API returned HTTP %d during streaming.', $http_code )
+			);
+		}
+
+		return true;
+	}
+
+	/**
 	 * Generates a deterministic cache key for the given content.
 	 *
 	 * Includes model and version to invalidate cache when logic changes.

@@ -53,6 +53,7 @@ final class RestController extends Abstract_REST_Controller {
 	 * {@inheritDoc}
 	 *
 	 * Route: POST /wp-json/ai/v1/suggest
+	 * Route: POST /wp-json/ai/v1/suggest-stream
 	 */
 	public function register_routes(): void {
 		register_rest_route(
@@ -65,6 +66,19 @@ final class RestController extends Abstract_REST_Controller {
 					'permission_callback' => [ $this, 'permissions_check' ],
 					// Declaring args here lets WP handle type coercion and
 					// run our callbacks before the main callback fires.
+					'args'                => $this->get_endpoint_args(),
+				],
+			]
+		);
+
+		register_rest_route(
+			$this->namespace . $this->version,
+			'/' . $this->rest_base . '-stream',
+			[
+				[
+					'methods'             => WP_REST_Server::CREATABLE, // POST only.
+					'callback'            => [ $this, 'handle_suggest_stream' ],
+					'permission_callback' => [ $this, 'permissions_check' ],
 					'args'                => $this->get_endpoint_args(),
 				],
 			]
@@ -172,6 +186,60 @@ final class RestController extends Abstract_REST_Controller {
 				],
 			]
 		);
+	}
+
+	/**
+	 * Handles the POST /wp-json/ai/v1/suggest-stream request.
+	 *
+	 * Streams AI-generated text directly to the HTTP client chunk-by-chunk.
+	 *
+	 * This method bypasses WordPress's normal REST response pipeline intentionally:
+	 * it clears output buffers, sets streaming-appropriate headers, and calls exit
+	 * after emitting all chunks. Returning a WP_REST_Response here would buffer
+	 * the full response, defeating the purpose of streaming.
+	 *
+	 * Error protocol:
+	 *   - Pre-stream errors (e.g. missing API key) are emitted as a plain-text
+	 *     marker prefixed with "[WRITEFLOW_STREAM_ERROR]:" so the frontend can
+	 *     detect and surface them without relying on HTTP status codes.
+	 *
+	 * @param WP_REST_Request $request Full details about the request.
+	 */
+	public function handle_suggest_stream( WP_REST_Request $request ): void {
+		$content = $request->get_param( 'content' );
+		$client  = new AIClient();
+
+		// Clear every output-buffering layer so chunks reach the client immediately.
+		// WordPress (and some hosting stacks) enable OB by default.
+		while ( ob_get_level() ) {
+			ob_end_clean();
+		}
+
+		// Override any headers WordPress set before dispatching our callback.
+		header( 'Content-Type: text/plain; charset=utf-8' );
+		header( 'Cache-Control: no-cache' );
+		// Instructs Nginx's proxy_buffering to pass chunks straight through.
+		header( 'X-Accel-Buffering: no' );
+
+		$result = $client->suggest_stream(
+			$content,
+			static function ( string $chunk ): void {
+				// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Plain-text chunks from OpenAI; escaping would corrupt the stream.
+				echo $chunk;
+				flush();
+			}
+		);
+
+		// suggest_stream returns WP_Error for both pre-stream failures (API key
+		// missing) and mid-stream failures (cURL error). Emit a detectable marker
+		// so the JS client can surface a human-readable message.
+		if ( is_wp_error( $result ) ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Error message is from internal WP_Error, not user input.
+			echo '[WRITEFLOW_STREAM_ERROR]:' . $result->get_error_message();
+			flush();
+		}
+
+		exit;
 	}
 
 	/**
